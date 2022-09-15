@@ -50,31 +50,27 @@ func (nm *NodeManager) Get_msg_handler(msg_cmd uint32) func([]byte) []byte {
 type Node_msg struct {
 	Id         uint32
 	Msg_cmd    uint32
-	Msg_chunks chan string
-	Msg_err    bool
+	Msg_chunks chan int32 //incoming message chunk size [chunk1_size,chunk2_size....] , -1 for eof of message
+	Msg_buffer *bytes.Buffer
+	//Msg_chunks chan string
+	Msg_err bool
 }
 
 func (node_msg *Node_msg) Receive() ([]byte, error) {
 
 	total_chunks := 0
 	eof := false
-	buffer := new(bytes.Buffer)
 
 	for {
 
 		select {
-		case node_msg := <-node_msg.Msg_chunks:
-			total_chunks++
-			if node_msg != "" {
-				node_msg_bytes := []byte(node_msg)
-				_, err := buffer.Write(node_msg_bytes[1:])
-				if err != nil {
-					return nil, err
-				}
-				//end of message chunk
-				if node_msg_bytes[0] == 1 {
-					eof = true
-				}
+
+		case msg_chunk_size := <-node_msg.Msg_chunks:
+
+			if msg_chunk_size == -1 {
+				eof = true
+			} else {
+				total_chunks++
 			}
 
 		case <-time.After(time.Duration(NODE_MSG_READ_TIMEOUT_SECS) * time.Second):
@@ -87,9 +83,9 @@ func (node_msg *Node_msg) Receive() ([]byte, error) {
 
 		if eof {
 			if node_msg.Msg_err {
-				return nil, errors.New(buffer.String())
+				return nil, errors.New(node_msg.Msg_buffer.String())
 			}
-			return buffer.Bytes(), nil
+			return node_msg.Msg_buffer.Bytes(), nil
 		}
 
 	}
@@ -105,7 +101,11 @@ func (nc *Node_conn) send_msg(msg_id uint32, msg_cmd uint32, raw_msg []byte) err
 
 	r_msg_len := len(raw_msg)
 
-	chunks := int(math.Ceil(float64(r_msg_len) / msg.MSG_PAYLOAD_SIZE_LIMIT)) //chunks >=1
+	//chunks >=1
+	chunks := int(math.Ceil(float64(r_msg_len) / msg.MSG_PAYLOAD_SIZE_LIMIT))
+	if chunks == 0 {
+		chunks = 1
+	}
 
 	if chunks > msg.MSG_CHUNKS_LIMIT {
 		return errors.New("send_msg chunks over limit, chunks:" + strconv.Itoa(chunks))
@@ -155,7 +155,8 @@ func (nc *Node_conn) Request(msg_cmd uint32, raw_msg []byte) ([]byte, error) {
 	n_msg := &Node_msg{
 		Id:         rand.Uint32(),
 		Msg_cmd:    msg_cmd,
-		Msg_chunks: make(chan string, msg.MSG_CHUNKS_LIMIT),
+		Msg_chunks: make(chan int32, msg.MSG_CHUNKS_LIMIT+1), //+1 for eof
+		Msg_buffer: bytes.NewBuffer([]byte{}),
 	}
 
 	nc.Messages.Store(n_msg.Id, n_msg)
@@ -228,11 +229,14 @@ func (node_conn *Node_conn) Run() {
 
 			if node_msg_i, exist := node_conn.Messages.Load(msg_header.Id); exist {
 
-				node_msg_i.(*Node_msg).Msg_chunks <- string([]byte{msg_header.EOF}) + string(payload_buf[0:msg_header.Payload_size])
+				if msg_header.Payload_size > 0 {
+					node_msg_i.(*Node_msg).Msg_buffer.Write(payload_buf[0:msg_header.Payload_size])
+				}
+				node_msg_i.(*Node_msg).Msg_chunks <- int32(msg_header.Payload_size)
 
-				// if msg_header.EOF == 1 {
-				// 	node_msg_i.(*Node_msg).Msg_eof <- struct{}{}
-				// }
+				if msg_header.EOF == 1 {
+					node_msg_i.(*Node_msg).Msg_chunks <- -1
+				}
 
 				if msg_header.Cmd == msg.CMD_ERR {
 					node_msg_i.(*Node_msg).Msg_err = true
@@ -256,15 +260,19 @@ func (node_conn *Node_conn) Run() {
 			n_msg := &Node_msg{
 				Id:         msg_header.Id,
 				Msg_cmd:    msg_header.Cmd,
-				Msg_chunks: make(chan string, msg.MSG_CHUNKS_LIMIT+1), //+1 for EOF tag
+				Msg_chunks: make(chan int32, msg.MSG_CHUNKS_LIMIT+1), //+1 for eof
+				Msg_buffer: bytes.NewBuffer([]byte{}),
 			}
 
-			n_msg.Msg_chunks <- string([]byte{msg_header.EOF}) + string(payload_buf[0:msg_header.Payload_size])
+			if msg_header.Payload_size > 0 {
+				n_msg.Msg_buffer.Write(payload_buf[0:msg_header.Payload_size])
+			}
 
-			//n_msg.Msg_chunks <- string(payload_buf[0:msg_header.Payload_size])
-			// if msg_header.EOF == 1 {
-			// 	n_msg.Msg_eof <- struct{}{}
-			// }
+			n_msg.Msg_chunks <- int32(msg_header.Payload_size)
+
+			if msg_header.EOF == 1 {
+				n_msg.Msg_chunks <- -1
+			}
 
 			node_conn.Messages.Store(msg_header.Id, n_msg)
 

@@ -40,6 +40,7 @@ func main() {
 			//do some test request to node_b
 			info, info_err := node_con_b.Request(msg.CMD_TEST_INFO, []byte("want to know some of your info"))
 			fmt.Println(string(info), info_err)
+
 		}()
 	}
 

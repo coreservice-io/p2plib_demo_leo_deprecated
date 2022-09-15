@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/coreservice-io/p2plib_demo_leo/msg"
 	"github.com/coreservice-io/p2plib_demo_leo/node"
@@ -29,7 +30,9 @@ func main() {
 	go node_con_a.Run()
 
 	//test some request
-	chat, chat_err := node_con_a.Request(msg.CMD_TEST_CHAT, []byte("tommy"))
+	chat, chat_err := node_con_a.Request(msg.CMD_TEST_CHAT, []byte("jack"))
 	fmt.Println(string(chat), chat_err)
+
+	time.Sleep(30 * time.Second)
 
 }
