@@ -5,18 +5,18 @@ import (
 	"net"
 
 	"github.com/coreservice-io/p2plib_demo_leo/msg"
-	"github.com/coreservice-io/p2plib_demo_leo/node"
+	"github.com/coreservice-io/p2plib_demo_leo/peer"
 )
 
 func main() {
 
 	// msg_handlers
-	node.GetNodeManager().Reg_msg_handler(msg.CMD_TEST_CHAT, func(param []byte) []byte {
+	peer.GetPeerManager().Reg_msg_handler(msg.CMD_TEST_CHAT, func(param []byte) []byte {
 		fmt.Println("CMD_TEST_CHAT calldata:", string(param))
 		return []byte("hello:" + string(param))
 	})
 
-	var node_con_b *node.Node_conn
+	var peer_con_b *peer.Peer_conn
 
 	////////////////////////////////////////////
 
@@ -33,12 +33,12 @@ func main() {
 			continue
 		}
 
-		node_con_b = &node.Node_conn{Conn: conn}
-		go node_con_b.Run()
+		peer_con_b = &peer.Peer_conn{Conn: conn}
+		go peer_con_b.Run()
 
 		go func() {
-			//do some test request to node_b
-			info, info_err := node_con_b.Request(msg.CMD_TEST_INFO, []byte("want to know some of your info"))
+			//do some test request to peer_b
+			info, info_err := peer_con_b.Request(msg.CMD_TEST_INFO, []byte("want to know some of your info"))
 			fmt.Println(string(info), info_err)
 
 		}()

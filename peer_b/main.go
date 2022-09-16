@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/coreservice-io/p2plib_demo_leo/msg"
-	"github.com/coreservice-io/p2plib_demo_leo/node"
+	"github.com/coreservice-io/p2plib_demo_leo/peer"
 )
 
 func main() {
 
 	// msg_handlers
-	node.GetNodeManager().Reg_msg_handler(msg.CMD_TEST_INFO, func(param []byte) []byte {
+	peer.GetPeerManager().Reg_msg_handler(msg.CMD_TEST_INFO, func(param []byte) []byte {
 		fmt.Println("CMD_TEST_INFO calldata:", string(param))
 		return []byte("my info private-key of eth: xxx-xx-xx-xxxx-xxx-xxxx")
 	})
@@ -23,14 +23,14 @@ func main() {
 		return
 	}
 
-	node_con_a := &node.Node_conn{
+	peer_con_a := &peer.Peer_conn{
 		Conn: a_conn,
 	}
 
-	go node_con_a.Run()
+	go peer_con_a.Run()
 
 	//test some request
-	chat, chat_err := node_con_a.Request(msg.CMD_TEST_CHAT, []byte("jack"))
+	chat, chat_err := peer_con_a.Request(msg.CMD_TEST_CHAT, []byte("jack"))
 	fmt.Println(string(chat), chat_err)
 
 	time.Sleep(30 * time.Second)

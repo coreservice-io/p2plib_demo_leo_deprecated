@@ -1,4 +1,4 @@
-package node
+package peer
 
 import (
 	"bufio"
@@ -17,28 +17,28 @@ import (
 )
 
 const VERSION = 1
-const NODE_MSG_WRITE_TIMEOUT_SECS = 8 //node ->1 msg -> node  write max duration in seconds
-const NODE_MSG_READ_TIMEOUT_SECS = 8  //node <- 1 msg <- node  read max duration in seconds
+const PEER_MSG_WRITE_TIMEOUT_SECS = 8 //peer ->1 msg -> peer  write max duration in seconds
+const PEER_MSG_READ_TIMEOUT_SECS = 8  //peer <- 1 msg <- peer  read max duration in seconds
 
 //////////////////////////////////////////////////////////////////
 
-var node_manager *NodeManager = &NodeManager{}
+var peer_manager *PeerManager = &PeerManager{}
 
-func GetNodeManager() *NodeManager {
-	return node_manager
+func GetPeerManager() *PeerManager {
+	return peer_manager
 }
 
-type NodeManager struct {
+type PeerManager struct {
 	Msg_handlers sync.Map //msg_cmd => func(*Msg_channel)
 }
 
-func (nm *NodeManager) Reg_msg_handler(msg_cmd uint32, handler func([]byte) []byte) {
-	nm.Msg_handlers.Store(msg_cmd, handler)
+func (pm *PeerManager) Reg_msg_handler(msg_cmd uint32, handler func([]byte) []byte) {
+	pm.Msg_handlers.Store(msg_cmd, handler)
 }
 
 //return nil if not exist
-func (nm *NodeManager) Get_msg_handler(msg_cmd uint32) func([]byte) []byte {
-	if h_i, ok := nm.Msg_handlers.Load(msg_cmd); ok {
+func (pm *PeerManager) Get_msg_handler(msg_cmd uint32) func([]byte) []byte {
+	if h_i, ok := pm.Msg_handlers.Load(msg_cmd); ok {
 		return h_i.(func([]byte) []byte)
 	} else {
 		return nil
@@ -47,16 +47,15 @@ func (nm *NodeManager) Get_msg_handler(msg_cmd uint32) func([]byte) []byte {
 
 //////////////////////////////////////////////////////////////////
 
-type Node_msg struct {
+type Peer_msg struct {
 	Id         uint32
 	Msg_cmd    uint32
 	Msg_chunks chan int32 //incoming message chunk size [chunk1_size,chunk2_size....] , -1 for eof of message
 	Msg_buffer *bytes.Buffer
-	//Msg_chunks chan string
-	Msg_err bool
+	Msg_err    bool
 }
 
-func (node_msg *Node_msg) Receive() ([]byte, error) {
+func (peer_msg *Peer_msg) Receive() ([]byte, error) {
 
 	total_chunks := 0
 	eof := false
@@ -65,7 +64,7 @@ func (node_msg *Node_msg) Receive() ([]byte, error) {
 
 		select {
 
-		case msg_chunk_size := <-node_msg.Msg_chunks:
+		case msg_chunk_size := <-peer_msg.Msg_chunks:
 
 			if msg_chunk_size == -1 {
 				eof = true
@@ -73,8 +72,8 @@ func (node_msg *Node_msg) Receive() ([]byte, error) {
 				total_chunks++
 			}
 
-		case <-time.After(time.Duration(NODE_MSG_READ_TIMEOUT_SECS) * time.Second):
-			return nil, errors.New("NODE_MSG_READ_TIMEOUT_SECS")
+		case <-time.After(time.Duration(PEER_MSG_READ_TIMEOUT_SECS) * time.Second):
+			return nil, errors.New("PEER_MSG_READ_TIMEOUT_SECS")
 		}
 
 		if total_chunks > msg.MSG_CHUNKS_LIMIT {
@@ -82,22 +81,22 @@ func (node_msg *Node_msg) Receive() ([]byte, error) {
 		}
 
 		if eof {
-			if node_msg.Msg_err {
-				return nil, errors.New(node_msg.Msg_buffer.String())
+			if peer_msg.Msg_err {
+				return nil, errors.New(peer_msg.Msg_buffer.String())
 			}
-			return node_msg.Msg_buffer.Bytes(), nil
+			return peer_msg.Msg_buffer.Bytes(), nil
 		}
 
 	}
 
 }
 
-type Node_conn struct {
+type Peer_conn struct {
 	Conn     net.Conn
 	Messages sync.Map
 }
 
-func (nc *Node_conn) send_msg(msg_id uint32, msg_cmd uint32, raw_msg []byte) error {
+func (pc *Peer_conn) send_msg(msg_id uint32, msg_cmd uint32, raw_msg []byte) error {
 
 	r_msg_len := len(raw_msg)
 
@@ -131,8 +130,8 @@ func (nc *Node_conn) send_msg(msg_id uint32, msg_cmd uint32, raw_msg []byte) err
 			end = r_msg_len
 		}
 
-		nc.Conn.SetWriteDeadline(time.Now().Add(NODE_MSG_WRITE_TIMEOUT_SECS * time.Second))
-		_, w_err := nc.Conn.Write(msg.Encode_msg(&msg.MsgHeader{
+		pc.Conn.SetWriteDeadline(time.Now().Add(PEER_MSG_WRITE_TIMEOUT_SECS * time.Second))
+		_, w_err := pc.Conn.Write(msg.Encode_msg(&msg.MsgHeader{
 			Version:      VERSION,
 			Cmd:          msg_cmd_,
 			EOF:          msg_eof_,
@@ -150,25 +149,25 @@ func (nc *Node_conn) send_msg(msg_id uint32, msg_cmd uint32, raw_msg []byte) err
 
 }
 
-func (nc *Node_conn) Request(msg_cmd uint32, raw_msg []byte) ([]byte, error) {
+func (pc *Peer_conn) Request(msg_cmd uint32, raw_msg []byte) ([]byte, error) {
 
-	n_msg := &Node_msg{
+	p_msg := &Peer_msg{
 		Id:         rand.Uint32(),
 		Msg_cmd:    msg_cmd,
 		Msg_chunks: make(chan int32, msg.MSG_CHUNKS_LIMIT+1), //+1 for eof
 		Msg_buffer: bytes.NewBuffer([]byte{}),
 	}
 
-	nc.Messages.Store(n_msg.Id, n_msg)
-	defer nc.Messages.Delete(n_msg.Id)
+	pc.Messages.Store(p_msg.Id, p_msg)
+	defer pc.Messages.Delete(p_msg.Id)
 
 	//encode the message and send chunk by chunk with writetime out
-	err := nc.send_msg(n_msg.Id, msg_cmd, raw_msg)
+	err := pc.send_msg(p_msg.Id, msg_cmd, raw_msg)
 	if err != nil {
 		return nil, err
 	}
 	//after send finished , start to receive from msg_buffer chunk by chunk with readtimeout
-	r, r_err := n_msg.Receive()
+	r, r_err := p_msg.Receive()
 	if r_err != nil {
 		return nil, r_err
 	}
@@ -176,29 +175,24 @@ func (nc *Node_conn) Request(msg_cmd uint32, raw_msg []byte) ([]byte, error) {
 	return r, nil
 }
 
-func (node_conn *Node_conn) Run() {
+func (peer_conn *Peer_conn) Run() {
 
 	defer func() {
-		node_conn.Conn.Close()
-		fmt.Println("node conn exit")
+		peer_conn.Conn.Close()
+		fmt.Println("peer conn exit")
 	}()
 
-	reader := bufio.NewReader(node_conn.Conn)
+	reader := bufio.NewReader(peer_conn.Conn)
 	header_buf := make([]byte, msg.MSG_HEADER_SIZE)
 	payload_buf := make([]byte, msg.MSG_PAYLOAD_SIZE_LIMIT)
 
 	for {
 
-		header_n, err := io.ReadFull(reader, header_buf[:])
+		_, err := io.ReadFull(reader, header_buf[:])
 		if err != nil {
 			if err != io.EOF {
 				fmt.Println("handle_request header conn io read err:", err)
 			}
-			return
-		}
-
-		if header_n != msg.MSG_HEADER_SIZE {
-			fmt.Println("handle_request header_n != msg.MSG_HEADER_SIZE")
 			return
 		}
 
@@ -212,14 +206,9 @@ func (node_conn *Node_conn) Run() {
 
 		//read payload
 		if msg_header.Payload_size > 0 {
-			payload_n, err := io.ReadFull(reader, payload_buf[0:msg_header.Payload_size])
+			_, err := io.ReadFull(reader, payload_buf[0:msg_header.Payload_size])
 			if err != nil {
 				fmt.Println("handle_request payload conn io read err:", err)
-				return
-			}
-
-			if payload_n != int(msg_header.Payload_size) {
-				fmt.Println("handle_request payload_n != msg_header.Payload_size")
 				return
 			}
 		}
@@ -227,19 +216,19 @@ func (node_conn *Node_conn) Run() {
 		/////////////////////////////////////////
 		if msg_header.Cmd == msg.CMD_ERR || msg_header.Cmd == msg.CMD_0 {
 
-			if node_msg_i, exist := node_conn.Messages.Load(msg_header.Id); exist {
+			if peer_msg_i, exist := peer_conn.Messages.Load(msg_header.Id); exist {
 
 				if msg_header.Payload_size > 0 {
-					node_msg_i.(*Node_msg).Msg_buffer.Write(payload_buf[0:msg_header.Payload_size])
+					peer_msg_i.(*Peer_msg).Msg_buffer.Write(payload_buf[0:msg_header.Payload_size])
 				}
-				node_msg_i.(*Node_msg).Msg_chunks <- int32(msg_header.Payload_size)
+				peer_msg_i.(*Peer_msg).Msg_chunks <- int32(msg_header.Payload_size)
 
 				if msg_header.EOF == 1 {
-					node_msg_i.(*Node_msg).Msg_chunks <- -1
+					peer_msg_i.(*Peer_msg).Msg_chunks <- -1
 				}
 
 				if msg_header.Cmd == msg.CMD_ERR {
-					node_msg_i.(*Node_msg).Msg_err = true
+					peer_msg_i.(*Peer_msg).Msg_err = true
 				}
 
 			} else {
@@ -247,17 +236,17 @@ func (node_conn *Node_conn) Run() {
 			}
 
 		} else {
-			if _, exist := node_conn.Messages.Load(msg_header.Id); exist {
+			if _, exist := peer_conn.Messages.Load(msg_header.Id); exist {
 				fmt.Println("handle_request msg_id overlap, id:", msg_header.Id)
 				return //must return not continue as consequent message will bring chaos if continue
 			}
 
-			if GetNodeManager().Get_msg_handler(msg_header.Cmd) == nil {
+			if GetPeerManager().Get_msg_handler(msg_header.Cmd) == nil {
 				fmt.Println("msg_handler not found, msg_cmd:", msg_header.Cmd)
 				return //must return not continue as consequent message will bring chaos if continue
 			}
 
-			n_msg := &Node_msg{
+			p_msg := &Peer_msg{
 				Id:         msg_header.Id,
 				Msg_cmd:    msg_header.Cmd,
 				Msg_chunks: make(chan int32, msg.MSG_CHUNKS_LIMIT+1), //+1 for eof
@@ -265,35 +254,35 @@ func (node_conn *Node_conn) Run() {
 			}
 
 			if msg_header.Payload_size > 0 {
-				n_msg.Msg_buffer.Write(payload_buf[0:msg_header.Payload_size])
+				p_msg.Msg_buffer.Write(payload_buf[0:msg_header.Payload_size])
 			}
 
-			n_msg.Msg_chunks <- int32(msg_header.Payload_size)
+			p_msg.Msg_chunks <- int32(msg_header.Payload_size)
 
 			if msg_header.EOF == 1 {
-				n_msg.Msg_chunks <- -1
+				p_msg.Msg_chunks <- -1
 			}
 
-			node_conn.Messages.Store(msg_header.Id, n_msg)
+			peer_conn.Messages.Store(msg_header.Id, p_msg)
 
 			//start receive process
-			go func(node_msg *Node_msg, nc *Node_conn) {
+			go func(peer_msg *Peer_msg, nc *Peer_conn) {
 
-				defer node_conn.Messages.Delete(node_msg.Id)
+				defer peer_conn.Messages.Delete(peer_msg.Id)
 
-				calldata, err := node_msg.Receive()
+				calldata, err := peer_msg.Receive()
 
 				if err != nil {
-					nc.send_msg(node_msg.Id, msg.CMD_ERR, []byte(err.Error()))
+					nc.send_msg(peer_msg.Id, msg.CMD_ERR, []byte(err.Error()))
 					fmt.Println(err)
 					return
 				}
 
 				//send call result
-				result := GetNodeManager().Get_msg_handler(msg_header.Cmd)(calldata)
-				nc.send_msg(node_msg.Id, msg.CMD_0, result)
+				result := GetPeerManager().Get_msg_handler(msg_header.Cmd)(calldata)
+				nc.send_msg(peer_msg.Id, msg.CMD_0, result)
 
-			}(n_msg, node_conn)
+			}(p_msg, peer_conn)
 
 		}
 
